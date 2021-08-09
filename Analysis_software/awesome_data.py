@@ -13,6 +13,9 @@ datasets = [DataSet(filepath=filepath,
                     name='Cohesin-MCM_wt_lowsalt.yama', archive_type='DnaMoleculeArchive',
                     accept_tag='accept', labels=dict(Cohesin='Halo-JF549', MCM='ybbR-LD655')),
             DataSet(filepath=filepath,
+                    name='Cohesin-MCM_YDF_lowsalt.yama', archive_type='DnaMoleculeArchive',
+                    accept_tag='accept', labels=dict(Cohesin='Halo-JF549', MCM='ybbR-LD655')),
+            DataSet(filepath=filepath,
                     name='Cohesin-only_lowsalt.yama', archive_type='DnaMoleculeArchive',
                     accept_tag='accept', labels=dict(Cohesin='Halo-JF549'))
             ]
