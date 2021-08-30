@@ -200,22 +200,93 @@ class DnaMoleculeArchive(Archive):
 
         return 'passed'
 
-    def add_df_noidle(self, prefix, specifier):
+    def add_segments_tables(self):
         """
-        Generates a copy of molecule.df (df_noidle) with all rows removed falling in specified regions
+        Attach all segment tables to molecule records (stored as dict)
+        """
+        for molecule in self.molecules:
+            molecule.seg_dfs = list()
+
+            # all segmentTableNames
+            for x, y, region in (sc.to_python(self.archive_link.get(molecule.uid).getSegmentsTableNames())):
+                # internal control that all seg_dfs are valid
+                _assigned = False
+                # all proteins on molecule
+                for prefix in molecule.prefixes:
+                    if re.match(prefix, x) and re.match(prefix, y):
+                        molecule.seg_dfs.append(SegmentsTable(molecule=molecule, prefix=prefix,
+                                                              col_x=x, col_y=y, region=region))
+                        _assigned = True
+                        break
+                if not _assigned:
+                    err_message = f"Conflict in molecule {molecule.uid}!\nSegmentTable {x} {y} {region} not assigned!"
+                    raise MarsPyException(err_message)
+
+    def filter_segments(self, sigma_b_max=0):
+        """
+        Filter all segments for all molecules in archive based on SegmentsTable type.
+        Also see filter_segments() in SegmentsTable object:
+
+            Mode 1: SegmentsTable type: 'rate' -
+            Reject all segments with B value (velocity) < b_min and sigma_B > sigma_b_max (poor fits)
+
+        """
+        for molecule in self.molecules:
+
+            # apply filter to all seg_dfs
+            for seg_df in molecule.seg_dfs:
+                seg_df.filter_segments(sigma_b_max=sigma_b_max)
+
+            # in case seg_df is empty after filtering, delete object
+            remove_seg_dfs = set()
+            for seg_df in molecule.seg_dfs:
+                if len(seg_df.df) == 0:
+                    remove_seg_dfs.add(seg_df)
+            for seg_df in remove_seg_dfs:
+                molecule.seg_dfs.remove(seg_df)
+
+    def detect_pauses(self, thresh=200, global_thresh=True, length=1, col='B'):
+        """
+        Detect pauses in translocation for all SegmentTables of all molecules in archive.
+        Also see detect_pauses() in SegmentsTable object:
+
+            Detection pauses in SegmentTable (only for type = 'rate', others are skipped)
+            global_thresh: Set to True if a fixed threshold for all molecules should be used
+            thresh: threshold to detect pauses.
+            length: minimal pause duration (s)
+            If global_thresh is False, a molecule-specific threshold is calculated with thresh^-1 * np.mean(col)
+            col: column evaluated for pauses
+        """
+        for molecule in self.molecules:
+            for seg_df in molecule.seg_dfs:
+                seg_df.detect_pauses(thresh=thresh, global_thresh=global_thresh, length=length, col=col)
+
+    def add_df_noidle(self, prefix):
+        """
+        Generates a copy of molecule.df (df_noidle) with all rows removed falling in pause segments
+        Need to run detect_pauses first!
         """
         for molecule in self.molecules:
 
             molecule.df_noidle = molecule.df.copy()
             # list of rows marked for removal
             drop_rows = []
+            # pause looping here
 
-            for region in molecule.regions:
-                if specifier in region.name and region.prefix == prefix:
-                    for row, index in molecule.df.iterrows():
-                        if molecule.df.loc[row, prefix + region.column] in range(int(region.start),
-                                                                                 int(region.end) + 1):
-                            drop_rows.append(row)
+            for seg_df in filter(lambda df: df.type == 'rate' and df.prefix == prefix, molecule.seg_dfs):
+                try:
+                    for row, index in seg_df.df[seg_df.df['pause_B']].iterrows():
+                        pause_start = seg_df.df[seg_df.df['pause_B']].loc[row, 'X1']
+                        pause_end = seg_df.df[seg_df.df['pause_B']].loc[row, 'X2']
+
+                        for row2, index2 in molecule.df.iterrows():
+                            if pause_start <= molecule.df.loc[row2, seg_df.prefix + seg_df.col_x] <= pause_end:
+                                drop_rows.append(row2)
+
+                except KeyError:
+                    err_message = f"Conflict in molecule {molecule.uid}!\n\
+                    No pauses were not detected yet!"
+                    raise MarsPyException(err_message)
 
             molecule.df_noidle.drop(drop_rows, inplace=True)
 

@@ -96,6 +96,115 @@ class DnaMolecule(Molecule):
                 continue
 
 
+class SegmentsTable:
+    """
+    SegmentsTable object holding the actual df, with additional information in attributes.
+    Also contains specific methods for filtering, bleaching steps, pause detection.
+    """
+
+    def __init__(self, molecule, prefix, col_x, col_y, region):
+        # uid for debugging
+        self.uid = molecule.uid
+        # which prefix does it belong to
+        self.prefix = prefix
+        # remove prefix for x and y columns => general naming
+        self.col_x = col_x.split(self.prefix)[-1]
+        self.col_y = col_y.split(self.prefix)[-1]
+        self.region = region
+        # actual SegmentsTable()
+        self.df = sc.to_python(molecule.archive.get(molecule.uid).getSegmentsTable(col_x, col_y, region))
+        # type of SegmentTable (default None)
+        self.type = None
+        # keep track if seg_dfs were already filtered before data is interpreted
+        self.filtered = False
+        # assign type of SegmentTable (one needs to be True)
+        if self.col_y == 'Intensity':
+            self.type = 'bleaching'
+        elif self.col_y == 'Position_on_DNA':
+            self.type = 'rate'
+        else:
+            err_message = f"Conflict in molecule {self.uid}!\nSegmentTable type could not be assigned!"
+            raise MarsPyException(err_message)
+
+    def filter_segments(self, sigma_b_max=0):
+        """
+        Mode 2: SegmentsTable type: 'rate' -
+        Reject all segments with B value (velocity) < b_min and sigma_B > sigma_b_max (poor fits)
+        """
+
+        # Mode 1 - type 'rate'
+        if self.type == 'rate':
+
+            # need to remove rows at the end
+            remove_rows = set()
+            # loop through rows and find segments which match exclusion criteria
+            for i in range(len(self.df)):
+                if self.df.loc[i, 'Sigma_B'] >= sigma_b_max:
+                    remove_rows.add(i)
+
+            # remove all rows & update indices
+            self.df.drop(list(remove_rows), axis=0, inplace=True)
+            self.df.reset_index(drop=True, inplace=True)
+
+            # successfully filtered
+            self.filtered = True
+
+    def detect_pauses(self, thresh=200, global_thresh=True, length=1, col='B'):
+        """
+        Detection pauses in SegmentTable (only for type = 'rate')
+        global_thresh: Set to True if a fixed threshold for all molecules should be used
+        thresh: threshold to detect pauses.
+        length: minimal pause duration (s)
+        If global_thresh is False, a molecule-specific threshold is calculated with thresh^-1 * np.mean(col)
+        col: column evaluated for pauses
+        """
+        # only SegmentsTables with type 'rate'
+        if self.type == 'rate':
+            self.df['pause_' + col] = False
+            cutoff = thresh
+            # iterate once for each entry in seg_df
+            for i in range(len(self.df)):
+                if not global_thresh:
+                    # redefine cutoff
+                    cutoff = self.df[~self.df['pause_' + col]][col].mean() / thresh
+
+                for row in self.df.index:
+                    self.df.loc[row, 'pause_' + col] = (abs(self.df.loc[row, col]) < cutoff) and \
+                                                       (self.df.loc[row, 'X2'] - self.df.loc[row, 'X1'] >= length)
+            # if two subsequent segments are pauses merge them
+            remove_rows = set()
+            for i in range(1, len(self.df)):
+                # both pauses
+                # additional requirements: time values match and y values within 1 kb
+                if (self.df.loc[i - 1, 'pause_B'] and self.df.loc[i, 'pause_B'] and
+                        self.df.loc[i - 1, 'X2'] == self.df.loc[i, 'X1'] and
+                        abs(self.df.loc[i - 1, 'Y2'] - self.df.loc[i, 'Y1'] < 1000)):
+                    # recalculate values (x2 and y2 values in row i stay the same)
+                    x1 = self.df.loc[i - 1, 'X1']
+                    y1 = self.df.loc[i - 1, 'Y1']
+                    a = np.average(self.df[i - 1:i + 1]['A'],
+                                   weights=self.df[i - 1:i + 1]['X2'] - self.df[i - 1:i + 1]['X1'])
+                    sigma_a = np.average(self.df[i - 1:i + 1]['Sigma_A'],
+                                         weights=self.df[i - 1:i + 1]['X2'] - self.df[i - 1:i + 1]['X1'])
+                    b = np.average(self.df[i - 1:i + 1]['B'],
+                                   weights=self.df[i - 1:i + 1]['X2'] - self.df[i - 1:i + 1]['X1'])
+                    sigma_b = np.average(self.df[i - 1:i + 1]['Sigma_B'],
+                                         weights=self.df[i - 1:i + 1]['X2'] - self.df[i - 1:i + 1]['X1'])
+
+                    # add row i-1 for removal and reassign calculated values for row i
+                    remove_rows.add(i - 1)
+                    self.df.loc[i, 'X1'] = x1
+                    self.df.loc[i, 'Y1'] = y1
+                    self.df.loc[i, 'A'] = a
+                    self.df.loc[i, 'Sigma_A'] = sigma_a
+                    self.df.loc[i, 'B'] = b
+                    self.df.loc[i, 'Sigma_B'] = sigma_b
+
+            # remove all rows & update indices
+            self.df.drop(list(remove_rows), axis=0, inplace=True)
+            self.df.reset_index(drop=True, inplace=True)
+
+
 class Region:
     """
     Region object holding following attributes: name, start, end and molecule column.
