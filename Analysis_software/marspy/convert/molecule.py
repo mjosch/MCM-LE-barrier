@@ -126,32 +126,10 @@ class SegmentsTable:
             err_message = f"Conflict in molecule {self.uid}!\nSegmentTable type could not be assigned!"
             raise MarsPyException(err_message)
 
-    def filter_segments(self, sigma_b_max=0):
-        """
-        Mode 2: SegmentsTable type: 'rate' -
-        Reject all segments with B value (velocity) < b_min and sigma_B > sigma_b_max (poor fits)
-        """
-
-        # Mode 1 - type 'rate'
-        if self.type == 'rate':
-
-            # need to remove rows at the end
-            remove_rows = set()
-            # loop through rows and find segments which match exclusion criteria
-            for i in range(len(self.df)):
-                if self.df.loc[i, 'Sigma_B'] >= sigma_b_max:
-                    remove_rows.add(i)
-
-            # remove all rows & update indices
-            self.df.drop(list(remove_rows), axis=0, inplace=True)
-            self.df.reset_index(drop=True, inplace=True)
-
-            # successfully filtered
-            self.filtered = True
-
-    def detect_pauses(self, thresh=200, global_thresh=True, length=1, col='B'):
+    def detect_pauses(self, thresh=200, sigma_max=30, global_thresh=True, length=1, col='B'):
         """
         Detection pauses in SegmentTable (only for type = 'rate')
+        sigma_max: maximal sigma of specified column (col)
         global_thresh: Set to True if a fixed threshold for all molecules should be used
         thresh: threshold to detect pauses.
         length: minimal pause duration (s)
@@ -162,15 +140,18 @@ class SegmentsTable:
         if self.type == 'rate':
             self.df['pause_' + col] = False
             cutoff = thresh
+
             # iterate once for each entry in seg_df
             for i in range(len(self.df)):
                 if not global_thresh:
                     # redefine cutoff
                     cutoff = self.df[~self.df['pause_' + col]][col].mean() / thresh
 
-                for row in self.df.index:
-                    self.df.loc[row, 'pause_' + col] = (abs(self.df.loc[row, col]) < cutoff) and \
-                                                       (self.df.loc[row, 'X2'] - self.df.loc[row, 'X1'] >= length)
+            for row in self.df.index:
+                self.df.loc[row, 'pause_' + col] = ((abs(self.df.loc[row, col]) < cutoff) and
+                                                    (self.df.loc[row, 'Sigma_'+col] < sigma_max) and
+                                                    (self.df.loc[row, 'X2'] - self.df.loc[row, 'X1'] > length))
+
             # if two subsequent segments are pauses merge them
             remove_rows = set()
             for i in range(1, len(self.df)):
