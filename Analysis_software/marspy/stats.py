@@ -31,7 +31,9 @@ def significance(p):
     :param p: probability of statistical test
     :return: string expression for significance
     """
-    if p <= 0.001:
+    if p < 0.0001:
+        expression = "****"
+    elif p < 0.001:
         expression = "***"
     elif p < 0.01:
         expression = "**"
